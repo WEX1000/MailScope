@@ -5,15 +5,18 @@ from pathlib import Path
 from app.analyzer import mail_analysis
 from app.osintdata import gather_osint_data
 
-LOGO = """ __   __  _______  ___   ___      _______  _______  _______  _______  _______ 
+RED = "\033[31m"
+YELLOW = "\033[33m"
+RESET = "\033[0m"
+
+LOGO = YELLOW + """ __   __  _______  ___   ___      _______  _______  _______  _______  _______ 
 |  |_|  ||   _   ||   | |   |    |       ||       ||       ||       ||       |
 |       ||  |_|  ||   | |   |    |  _____||       ||   _   ||    _  ||    ___|
 |       ||       ||   | |   |    | |_____ |       ||  | |  ||   |_| ||   |___ 
 |       ||       ||   | |   |___ |_____  ||      _||  |_|  ||    ___||    ___|
 | ||_|| ||   _   ||   | |       | _____| ||     |_ |       ||   |    |   |___ 
-|_|   |_||__| |__||___| |_______||_______||_______||_______||___|    |_______|
-------------------------------------------------------------------------------"""
-
+|_|   |_||__| |__||___| |_______||_______||_______||_______||___|    |_______|""" + RESET
+LINE = "-" * 78
 def main():
     vt_on = False
     abuse_on = False
@@ -23,7 +26,8 @@ def main():
 
     if not args:
         print(LOGO)
-        print("Missing argument, use -h")
+        print(LINE)
+        print(f"{RED}Missing argument, use -h{RESET}")
         return
 
     file_path = None
@@ -37,7 +41,7 @@ def main():
             print("  -url          enable urlscan.io")
             print("  -abuse        enable AbuseIPDB")
             print("  -json         saves results to JSON file")
-            print("-" * 78)
+            print(LINE)
             return
         elif args[i] == "-f" and i + 1 < len(args):
             file_path = args[i + 1]
@@ -62,8 +66,9 @@ def main():
         return
 
     print(LOGO)
+    print(LINE)
     print("File:", file_path)
-    print("-" * 78)
+    print(LINE)
 
     analysis_data = mail_analysis(file_path)
 
@@ -75,21 +80,12 @@ def main():
             "abuse_on" : abuse_on,
             "urlscan_on" : urlscan_on
         }
-
-    if JSON_on:
-        results = {
-            "analysis_data" : analysis_data,
-            "osint_tools_data" : osint_tools_data
-        }
-        with open(f"{Path(file_path).stem}.eml_Analysis.json", "w",  encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-
     
     print(f"Subject: {analysis_data['subject']}")
-    print("-" * 78)
+    print(LINE)
     print("Mail content:")
     print(analysis_data['content'])
-    print("-" * 78)
+    print(LINE)
     print("Basic info:")
     print(f"Date: {analysis_data['date']}")
     print(f"Sender domain: {analysis_data['sender_domain']}")
@@ -111,43 +107,61 @@ def main():
     
     if vt_on:
         print("-" * 34 + "VirusTotal" + "-" * 34)
-
-        if osint_tools_data['sender_ip_reputation']['score'] > 10:
-            print(f"Sender IP reputation: {osint_tools_data['sender_ip_reputation']['score']} - HIGH RISK!!!!")
-        else:
-            print(f"Sender IP reputation: {osint_tools_data['sender_ip_reputation']['score']}")
-
-        if osint_tools_data['sender_domain_reputation']['score'] > 10:
-            print(f"Sender domain reputation: {osint_tools_data['sender_domain_reputation']['score']} - HIGH RISK!!!!") 
-        else:
-            print(f"Sender domain reputation: {osint_tools_data['sender_domain_reputation']['score']}") 
-
-        for name, hash in (analysis_data["attachments_hashes"]).items():
-            if osint_tools_data[f'Hash reputation of {name} file']['score'] > 10:
-                print(f"File {name} reputation: {osint_tools_data[f'Hash reputation of {name} file']['score']} - HIGH RISK!!!!")
-                print(f"  - File type: {osint_tools_data[f'Hash reputation of {name} file']['type']}")
-                print(f"  - File size: {osint_tools_data[f'Hash reputation of {name} file']['size']}")
+        try:
+            if osint_tools_data['sender_ip_reputation']['score'] > 10:
+                print(f"Sender IP reputation: {osint_tools_data['sender_ip_reputation']['score']} - HIGH RISK!!!!")
             else:
-                print(f"File {name} reputation: {osint_tools_data[f'Hash reputation of {name} file']['score']}")
-                print(f"  - File type: {osint_tools_data[f'Hash reputation of {name} file']['type']}")
-                print(f"  - File size: {osint_tools_data[f'Hash reputation of {name} file']['size']}")
+                print(f"Sender IP reputation: {osint_tools_data['sender_ip_reputation']['score']}")
+
+            if osint_tools_data['sender_domain_reputation']['score'] > 10:
+                print(f"Sender domain reputation: {osint_tools_data['sender_domain_reputation']['score']} - HIGH RISK!!!!") 
+            else:
+                print(f"Sender domain reputation: {osint_tools_data['sender_domain_reputation']['score']}") 
+
+            for name, hash in (analysis_data["attachments_hashes"]).items():
+                if osint_tools_data[f'Hash reputation of {name} file']['score'] > 10:
+                    print(f"File {name} reputation: {osint_tools_data[f'Hash reputation of {name} file']['score']} - HIGH RISK!!!!")
+                    print(f"  - File type: {osint_tools_data[f'Hash reputation of {name} file']['type']}")
+                    print(f"  - File size: {osint_tools_data[f'Hash reputation of {name} file']['size']}")
+                else:
+                    print(f"File {name} reputation: {osint_tools_data[f'Hash reputation of {name} file']['score']}")
+                    print(f"  - File type: {osint_tools_data[f'Hash reputation of {name} file']['type']}")
+                    print(f"  - File size: {osint_tools_data[f'Hash reputation of {name} file']['size']}")
+        except:
+            print("VirusTotal API data contains errors, check returned .JSON file")
+            JSON_on = True
     
     if abuse_on:
         print("-" * 34 + "AbuseIPDB" + "-" * 35)
-        print(f"Confidence of abuse: {osint_tools_data['confidence_of_abuse']['confidence']}")
-        print(f"No. of reports: {osint_tools_data['confidence_of_abuse']['reports']}")
-        print(f"Country: {osint_tools_data['confidence_of_abuse']['country']}")
-        print(f"ISP: {osint_tools_data['confidence_of_abuse']['isp']}")
-        print(f"Usage: {osint_tools_data['confidence_of_abuse']['usage']}")
+        try:
+            print(f"Confidence of abuse: {osint_tools_data['confidence_of_abuse']['confidence']}")
+            print(f"No. of reports: {osint_tools_data['confidence_of_abuse']['reports']}")
+            print(f"Country: {osint_tools_data['confidence_of_abuse']['country']}")
+            print(f"ISP: {osint_tools_data['confidence_of_abuse']['isp']}")
+            print(f"Usage: {osint_tools_data['confidence_of_abuse']['usage']}")
+        except:
+            print("AbuseIPDB API data contains errors, check returned .JSON file")
+            JSON_on = True
 
     if urlscan_on:
         print("-" * 34 + "URLScan" + "-" * 37)
-        print(f"Sender domain scan: {osint_tools_data['sender_domain_scan']['result']}")
-        for name in analysis_data["urls"]:
-            print(f"URL '{name}' scan: {osint_tools_data[name]['result']}")
+        try:
+            print(f"Sender domain scan: {osint_tools_data['sender_domain_scan']['result']}")
+            for name in analysis_data["urls"]:
+                print(f"URL '{name}' scan: {osint_tools_data[name]['result']}")
+        except:
+            print("UrlScan API data contains errors, check returned .JSON file")
+            JSON_on = True
     
-    print("-" * 78)
+    print(LINE)
 
+    if JSON_on:
+        results = {
+            "analysis_data" : analysis_data,
+            "osint_tools_data" : osint_tools_data
+        }
+        with open(f"{Path(file_path).stem}.eml_Analysis.json", "w",  encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
     main()
