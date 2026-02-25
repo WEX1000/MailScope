@@ -7,237 +7,299 @@ from app.osintdata import gather_osint_data
 from app.scoring import calculate_threat_score
 from app.report import generate_markdown_report
 
+# ── ANSI colours ─────────────────────────────────────────────────────────────
 RED    = "\033[31m"
 YELLOW = "\033[33m"
 ORANGE = "\033[38;5;208m"
+GREEN  = "\033[32m"
 RESET  = "\033[0m"
 
-LOGO = YELLOW + """ __   __  _______  ___   ___      _______  _______  _______  _______  _______
+SCORE_COLOURS = {
+    "CRITICAL": RED,
+    "HIGH":     RED,
+    "MEDIUM":   ORANGE,
+    "LOW":      YELLOW,
+    "CLEAN":    GREEN,
+}
+
+LOGO = YELLOW + """\
+ __   __  _______  ___   ___      _______  _______  _______  _______  _______
 |  |_|  ||   _   ||   | |   |    |       ||       ||       ||       ||       |
 |       ||  |_|  ||   | |   |    |  _____||       ||   _   ||    _  ||    ___|
 |       ||       ||   | |   |    | |_____ |       ||  | |  ||   |_| ||   |___
 |       ||       ||   | |   |___ |_____  ||      _||  |_|  ||    ___||    ___|
 | ||_|| ||   _   ||   | |       | _____| ||     |_ |       ||   |    |   |___
 |_|   |_||__| |__||___| |_______||_______||_______||_______||___|    |_______|""" + RESET
+
 LINE = "-" * 78
 
-SCORE_COLORS = {
-    "CRITICAL": RED,
-    "HIGH":     RED,
-    "MEDIUM":   ORANGE,
-    "LOW":      YELLOW,
-    "CLEAN":    "\033[32m",  # green
-}
+HELP_TEXT = """\
+  -h            show help
+  -f <file>     path to .eml file
+  -vt           enable VirusTotal
+  -url          enable urlscan.io
+  -abuse        enable AbuseIPDB
+  -shodan       enable Shodan IP lookup
+  -json         save results to JSON file
+  -md           save results to Markdown report"""
 
 
-def print_threat_score(threat: dict):
-    score = threat.get("score", 0)
-    level = threat.get("level", "CLEAN")
-    color = SCORE_COLORS.get(level, RESET)
-    print("-" * 30 + " Threat Score " + "-" * 34)
-    print(f"{color}Score: {score}/100  [{level}]{RESET}")
-    for r in threat.get("reasons", []):
-        print(f"  {color}! {r}{RESET}")
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _section(title: str) -> str:
+    """Return a 78-char section divider with a centred title."""
+    inner = f" {title} "
+    left  = (78 - len(inner)) // 2
+    right = 78 - len(inner) - left
+    return "-" * left + inner + "-" * right
 
 
-def main():
-    vt_on      = False
-    abuse_on   = False
-    urlscan_on = False
-    shodan_on  = False
-    JSON_on    = False
-    md_on      = False
+# ── Argument parsing ─────────────────────────────────────────────────────────
 
-    args = sys.argv[1:]
+class Args:
+    __slots__ = ("file_path", "vt", "abuse", "urlscan", "shodan", "json", "md")
 
-    if not args:
+    def __init__(self):
+        self.file_path: str | None = None
+        self.vt      = False
+        self.abuse   = False
+        self.urlscan = False
+        self.shodan  = False
+        self.json    = False
+        self.md      = False
+
+
+def _parse_args(argv: list[str]) -> Args | None:
+    """Parse sys.argv[1:]. Returns None when execution should stop (help/error)."""
+    if not argv:
         print(LOGO)
         print(LINE)
         print(f"{RED}Missing argument, use -h{RESET}")
-        return
+        return None
 
-    file_path = None
+    args = Args()
     i = 0
-    while i < len(args):
-        if args[i] == "-h":
-            print(LOGO)
-            print("  -h            show help")
-            print("  -f <file>     path to .eml file")
-            print("  -vt           enable VirusTotal")
-            print("  -url          enable urlscan.io")
-            print("  -abuse        enable AbuseIPDB")
-            print("  -shodan       enable Shodan IP lookup")
-            print("  -json         saves results to JSON file")
-            print("  -md           saves results to Markdown report")
-            print(LINE)
-            return
-        elif args[i] == "-f" and i + 1 < len(args):
-            file_path = args[i + 1]
-            i += 2
-            continue
-        elif args[i] == "-vt":
-            vt_on = True; i += 1; continue
-        elif args[i] == "-url":
-            urlscan_on = True; i += 1; continue
-        elif args[i] == "-abuse":
-            abuse_on = True; i += 1; continue
-        elif args[i] == "-shodan":
-            shodan_on = True; i += 1; continue
-        elif args[i] == "-json":
-            JSON_on = True; i += 1; continue
-        elif args[i] == "-md":
-            md_on = True; i += 1; continue
-        else:
-            print(LOGO)
-            print("Invalid argument, use -h")
-            return
+    while i < len(argv):
+        match argv[i]:
+            case "-h":
+                print(LOGO)
+                print(HELP_TEXT)
+                print(LINE)
+                return None
+            case "-f":
+                if i + 1 >= len(argv):
+                    print(LOGO)
+                    print("Missing value for -f, use -h")
+                    return None
+                args.file_path = argv[i + 1]
+                i += 2
+            case "-vt":    args.vt      = True; i += 1
+            case "-url":   args.urlscan = True; i += 1
+            case "-abuse": args.abuse   = True; i += 1
+            case "-shodan":args.shodan  = True; i += 1
+            case "-json":  args.json    = True; i += 1
+            case "-md":    args.md      = True; i += 1
+            case _:
+                print(LOGO)
+                print(f"Unknown argument '{argv[i]}', use -h")
+                return None
 
-    if not file_path or not file_path.lower().endswith(".eml"):
+    if not args.file_path or not args.file_path.lower().endswith(".eml"):
         print(LOGO)
         print("Missing/invalid file path, use -h")
+        return None
+
+    return args
+
+
+# ── Section display functions ─────────────────────────────────────────────────
+
+def _display_email_info(analysis_data: dict) -> None:
+    print(f"Subject: {analysis_data['subject']}")
+    print(LINE)
+    print("Mail content:")
+    print(analysis_data["content"])
+    print(LINE)
+    print("Basic info:")
+    for label, key in (
+        ("Date",                "date"),
+        ("Sender domain",       "sender_domain"),
+        ("Sender IP",           "sender_ip"),
+        ("From",                "sender_addr"),
+        ("Return-Path",         "return_path"),
+        ("Message-ID",          "message_id"),
+        ("User-Agent/X-Mailer", "user_agent"),
+    ):
+        print(f"{label}: {analysis_data[key]}")
+    print(f"Recipients: {analysis_data['recipients']}")
+
+
+def _display_urls(urls: list[str]) -> None:
+    print("URLs:")
+    for u in urls:
+        print(f"  - {u}")
+
+
+def _display_attachments(analysis_data: dict) -> None:
+    susp_names = {s["name"] for s in analysis_data.get("suspicious_attachments", [])}
+    print("Attachments:")
+    for name, sha256 in analysis_data["attachments_hashes"].items():
+        alert = f"  {RED}[!] SUSPICIOUS EXTENSION{RESET}" if name in susp_names else ""
+        print(f"  - {name}{alert}")
+        print(f"    SHA256: {sha256}")
+
+    if analysis_data.get("suspicious_attachments"):
+        print(f"{RED}[!] Suspicious attachments:{RESET}")
+        for s in analysis_data["suspicious_attachments"]:
+            print(f"    {RED}* {s['name']}  ({s['ext']}){RESET}")
+
+
+def _display_vt(analysis_data: dict, osint_data: dict) -> bool:
+    """Prints VirusTotal results. Returns True if an error occurred."""
+    print(_section("VirusTotal"))
+    try:
+        ip_rep  = osint_data["sender_ip_reputation"]
+        dom_rep = osint_data["sender_domain_reputation"]
+
+        for label, rep in (("Sender IP reputation", ip_rep), ("Sender domain reputation", dom_rep)):
+            flag = " - HIGH RISK!!!!" if rep.get("score", 0) > 10 else ""
+            print(f"{label}: {rep['score']}{flag}")
+
+        for name in analysis_data["attachments_hashes"]:
+            h = osint_data[f"Hash reputation of {name} file"]
+            flag = " - HIGH RISK!!!!" if h.get("score", 0) > 10 else ""
+            print(f"File '{name}' reputation: {h['score']}{flag}")
+            print(f"  - Type: {h.get('type')}  Size: {h.get('size')} bytes")
+
+        return False
+    except Exception:
+        print("VirusTotal API data contains errors – check JSON output")
+        return True
+
+
+def _display_abuse(osint_data: dict) -> bool:
+    """Prints AbuseIPDB results. Returns True if an error occurred."""
+    print(_section("AbuseIPDB"))
+    try:
+        ab = osint_data["confidence_of_abuse"]
+        for label, field in (
+            ("Confidence of abuse", "confidence"),
+            ("Reports (90 days)",   "reports"),
+            ("Country",             "country"),
+            ("ISP",                 "isp"),
+            ("Usage type",          "usage"),
+        ):
+            print(f"{label}: {ab[field]}")
+        return False
+    except Exception:
+        print("AbuseIPDB API data contains errors – check JSON output")
+        return True
+
+
+def _display_shodan(osint_data: dict) -> bool:
+    """Prints Shodan results. Returns True if an error occurred."""
+    print(_section("Shodan"))
+    try:
+        sh = osint_data["shodan_ip"]
+        if "error" in sh:
+            print(f"Error: {sh['error']}")
+            return False
+        print(f"Organization : {sh.get('org')}")
+        print(f"ISP          : {sh.get('isp')}")
+        print(f"Country      : {sh.get('country')}")
+        ports = sh.get("ports", [])
+        print(f"Open ports   : {', '.join(str(p) for p in ports) or 'none'}")
+        tags  = sh.get("tags", [])
+        print(f"Tags         : {', '.join(tags) or 'none'}")
+        vulns = sh.get("vulns", [])
+        if vulns:
+            print(f"CVEs         : {', '.join(vulns)}")
+        return False
+    except Exception:
+        print("Shodan API data contains errors – check JSON output")
+        return True
+
+
+def _display_urlscan(analysis_data: dict, osint_data: dict) -> bool:
+    """Prints URLScan results. Returns True if an error occurred."""
+    print(_section("URLScan.io"))
+    try:
+        print(f"Sender domain: {osint_data['sender_domain_scan']['result']}")
+        for u in analysis_data["urls"]:
+            print(f"URL '{u}': {osint_data[u]['result']}")
+        return False
+    except Exception:
+        print("URLScan API data contains errors – check JSON output")
+        return True
+
+
+def _display_threat_score(threat: dict) -> None:
+    score  = threat.get("score", 0)
+    level  = threat.get("level", "CLEAN")
+    colour = SCORE_COLOURS.get(level, RESET)
+    print(_section("Threat Score"))
+    print(f"{colour}Score: {score}/100  [{level}]{RESET}")
+    for reason in threat.get("reasons", []):
+        print(f"  {colour}! {reason}{RESET}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    args = _parse_args(sys.argv[1:])
+    if args is None:
         return
 
     print(LOGO)
     print(LINE)
-    print("File:", file_path)
+    print(f"File: {args.file_path}")
     print(LINE)
 
-    analysis_data = mail_analysis(file_path)
+    analysis_data = mail_analysis(args.file_path)
 
-    if vt_on or abuse_on or urlscan_on or shodan_on:
-        osint_tools_data = gather_osint_data(
+    any_osint = args.vt or args.abuse or args.urlscan or args.shodan
+    if any_osint:
+        osint_data = gather_osint_data(
             analysis_data,
-            vt_on=vt_on,
-            abuse_on=abuse_on,
-            urlscan_on=urlscan_on,
-            shodan_on=shodan_on,
+            vt_on=args.vt,
+            abuse_on=args.abuse,
+            urlscan_on=args.urlscan,
+            shodan_on=args.shodan,
         )
     else:
-        osint_tools_data = {
-            "vt_on":     vt_on,
-            "abuse_on":  abuse_on,
-            "urlscan_on": urlscan_on,
-            "shodan_on": shodan_on,
+        osint_data = {
+            "vt_on": False, "abuse_on": False,
+            "urlscan_on": False, "shodan_on": False,
         }
 
-    threat = calculate_threat_score(analysis_data, osint_tools_data)
+    threat = calculate_threat_score(analysis_data, osint_data)
 
-    print(f"Subject: {analysis_data['subject']}")
-    print(LINE)
-    print("Mail content:")
-    print(analysis_data['content'])
-    print(LINE)
-    print("Basic info:")
-    print(f"Date: {analysis_data['date']}")
-    print(f"Sender domain: {analysis_data['sender_domain']}")
-    print(f"Sender IP: {analysis_data['sender_ip']}")
-    print(f"From: {analysis_data['sender_addr']}")
-    print(f"Return-Path: {analysis_data['return_path']}")
-    print(f"Recipients: {analysis_data['recipients']}")
-    print(f"Message-ID: {analysis_data['message_id']}")
-    print(f"User-Agent/X-Mailer: {analysis_data['user_agent']}")
+    _display_email_info(analysis_data)
+    _display_urls(analysis_data["urls"])
+    _display_attachments(analysis_data)
 
-    print("URLs:")
-    for u in analysis_data["urls"]:
-        print(f"  - {u}")
+    had_error = False
+    if args.vt:     had_error |= _display_vt(analysis_data, osint_data)
+    if args.abuse:  had_error |= _display_abuse(osint_data)
+    if args.shodan: had_error |= _display_shodan(osint_data)
+    if args.urlscan:had_error |= _display_urlscan(analysis_data, osint_data)
 
-    print("Attachments:")
-    susp_names = {s["name"] for s in analysis_data.get("suspicious_attachments", [])}
-    for name, hash_val in (analysis_data["attachments_hashes"]).items():
-        alert = f"  {RED}[!] SUSPICIOUS EXTENSION{RESET}" if name in susp_names else ""
-        print(f"  - File name: {name}{alert}")
-        print(f"    - SHA256 hash: {hash_val}")
-
-    if analysis_data.get("suspicious_attachments"):
-        print(f"{RED}[!] Suspicious attachments detected:{RESET}")
-        for s in analysis_data["suspicious_attachments"]:
-            print(f"    {RED}* {s['name']}  (extension: {s['ext']}){RESET}")
-
-    if vt_on:
-        print("-" * 34 + "VirusTotal" + "-" * 34)
-        try:
-            ip_rep = osint_tools_data['sender_ip_reputation']
-            if ip_rep.get('score', 0) > 10:
-                print(f"Sender IP reputation: {ip_rep['score']} - HIGH RISK!!!!")
-            else:
-                print(f"Sender IP reputation: {ip_rep['score']}")
-
-            dom_rep = osint_tools_data['sender_domain_reputation']
-            if dom_rep.get('score', 0) > 10:
-                print(f"Sender domain reputation: {dom_rep['score']} - HIGH RISK!!!!")
-            else:
-                print(f"Sender domain reputation: {dom_rep['score']}")
-
-            for name, hash_val in (analysis_data["attachments_hashes"]).items():
-                h_rep = osint_tools_data[f'Hash reputation of {name} file']
-                flag = " - HIGH RISK!!!!" if h_rep.get('score', 0) > 10 else ""
-                print(f"File {name} reputation: {h_rep['score']}{flag}")
-                print(f"  - File type: {h_rep.get('type')}")
-                print(f"  - File size: {h_rep.get('size')}")
-        except Exception:
-            print("VirusTotal API data contains errors, check returned .JSON file")
-            JSON_on = True
-
-    if abuse_on:
-        print("-" * 34 + "AbuseIPDB" + "-" * 35)
-        try:
-            ab = osint_tools_data['confidence_of_abuse']
-            print(f"Confidence of abuse: {ab['confidence']}")
-            print(f"No. of reports: {ab['reports']}")
-            print(f"Country: {ab['country']}")
-            print(f"ISP: {ab['isp']}")
-            print(f"Usage: {ab['usage']}")
-        except Exception:
-            print("AbuseIPDB API data contains errors, check returned .JSON file")
-            JSON_on = True
-
-    if shodan_on:
-        print("-" * 34 + " Shodan " + "-" * 36)
-        try:
-            sh = osint_tools_data['shodan_ip']
-            if "error" in sh:
-                print(f"Shodan error: {sh['error']}")
-            else:
-                print(f"Organization: {sh.get('org')}")
-                print(f"ISP: {sh.get('isp')}")
-                print(f"Country: {sh.get('country')}")
-                ports = sh.get("ports", [])
-                print(f"Open ports: {', '.join(str(p) for p in ports) if ports else 'none'}")
-                tags = sh.get("tags", [])
-                print(f"Tags: {', '.join(tags) if tags else 'none'}")
-                vulns = sh.get("vulns", [])
-                if vulns:
-                    print(f"CVEs: {', '.join(vulns)}")
-        except Exception:
-            print("Shodan API data contains errors, check returned .JSON file")
-            JSON_on = True
-
-    if urlscan_on:
-        print("-" * 34 + "URLScan" + "-" * 37)
-        try:
-            print(f"Sender domain scan: {osint_tools_data['sender_domain_scan']['result']}")
-            for name in analysis_data["urls"]:
-                print(f"URL '{name}' scan: {osint_tools_data[name]['result']}")
-        except Exception:
-            print("UrlScan API data contains errors, check returned .JSON file")
-            JSON_on = True
-
-    print_threat_score(threat)
+    _display_threat_score(threat)
     print(LINE)
 
-    if JSON_on:
+    if args.json or had_error:
         results = {
-            "analysis_data": analysis_data,
-            "osint_tools_data": osint_tools_data,
-            "threat_score": threat,
+            "analysis_data":  analysis_data,
+            "osint_data":     osint_data,
+            "threat_score":   threat,
         }
-        out = f"{Path(file_path).stem}.eml_Analysis.json"
+        out = f"{Path(args.file_path).stem}.eml_Analysis.json"
         with open(out, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         print(f"JSON saved: {out}")
 
-    if md_on:
-        out = generate_markdown_report(analysis_data, osint_tools_data, threat, file_path)
+    if args.md:
+        out = generate_markdown_report(analysis_data, osint_data, threat, args.file_path)
         print(f"Markdown report saved: {out}")
 
 

@@ -15,24 +15,28 @@ Shodan – sender IP           5
 Total                      100
 """
 
+from __future__ import annotations
 
-def _vt_pts(vt_result, max_pts: int) -> tuple[int, str | None]:
-    """Convert a VT score dict to points and an optional reason string."""
-    if not isinstance(vt_result, dict) or "score" in vt_result and vt_result.get("error"):
+from typing import Optional, Tuple
+
+
+def _vt_pts(vt_result: Optional[dict], max_pts: int) -> Tuple[int, Optional[str]]:
+    """Convert a VT result dict to (points, reason_or_None)."""
+    if not isinstance(vt_result, dict) or "error" in vt_result:
         return 0, None
     s = vt_result.get("score", 0)
     if s > 15:
-        return max_pts, f"VT score {s} (critical)"
+        return max_pts, f"score {s} (critical)"
     if s > 5:
-        return int(max_pts * 0.75), f"VT score {s} (high)"
+        return int(max_pts * 0.75), f"score {s} (high)"
     if s > 0:
-        return int(max_pts * 0.5), f"VT score {s} (medium)"
+        return int(max_pts * 0.50), f"score {s} (medium)"
     return 0, None
 
 
 def calculate_threat_score(analysis_data: dict, osint_data: dict) -> dict:
-    score = 0
-    reasons = []
+    score   = 0
+    reasons: list[str] = []
 
     # ── 1. VT sender IP (max 20) ─────────────────────────────────────────────
     pts, reason = _vt_pts(osint_data.get("sender_ip_reputation"), 20)
@@ -46,18 +50,16 @@ def calculate_threat_score(analysis_data: dict, osint_data: dict) -> dict:
         score += pts
         reasons.append(f"[VT-Domain] {reason}")
 
-    # ── 3. VT attachment hashes (max 20, takes the worst single file) ─────────
-    worst_hash_pts = 0
-    worst_hash_reason = None
+    # ── 3. VT attachment hashes (max 20, worst single file counts) ────────────
+    worst_pts, worst_reason = 0, None
     for name in analysis_data.get("attachments_hashes", {}):
-        key = f"Hash reputation of {name} file"
-        pts, reason = _vt_pts(osint_data.get(key), 20)
-        if pts > worst_hash_pts:
-            worst_hash_pts = pts
-            worst_hash_reason = f"[VT-Hash] {name}: {reason}"
-    if worst_hash_pts:
-        score += worst_hash_pts
-        reasons.append(worst_hash_reason)
+        pts, reason = _vt_pts(osint_data.get(f"Hash reputation of {name} file"), 20)
+        if pts > worst_pts:
+            worst_pts    = pts
+            worst_reason = f"[VT-Hash] {name}: {reason}"
+    if worst_pts:
+        score += worst_pts
+        reasons.append(worst_reason)
 
     # ── 4. AbuseIPDB (max 20) ────────────────────────────────────────────────
     abuse = osint_data.get("confidence_of_abuse")
@@ -86,13 +88,13 @@ def calculate_threat_score(analysis_data: dict, osint_data: dict) -> dict:
     # ── 6. Shodan (max 5) ────────────────────────────────────────────────────
     shodan = osint_data.get("shodan_ip")
     if isinstance(shodan, dict) and "error" not in shodan:
-        tags = [t.lower() for t in shodan.get("tags", [])]
-        malicious_tags = {"malware", "c2", "botnet", "phishing", "scanner", "tor"}
-        hit_tags = malicious_tags & set(tags)
-        vulns = shodan.get("vulns", [])
+        tags         = {t.lower() for t in shodan.get("tags", [])}
+        malicious    = {"malware", "c2", "botnet", "phishing", "scanner", "tor"}
+        hit_tags     = malicious & tags
+        vulns        = shodan.get("vulns", [])
         if hit_tags:
             score += 5
-            reasons.append(f"[Shodan] malicious tags: {', '.join(hit_tags)}")
+            reasons.append(f"[Shodan] malicious tags: {', '.join(sorted(hit_tags))}")
         elif vulns:
             score += 3
             reasons.append(f"[Shodan] {len(vulns)} CVE(s): {', '.join(vulns[:3])}")
@@ -102,19 +104,10 @@ def calculate_threat_score(analysis_data: dict, osint_data: dict) -> dict:
 
     final = min(score, 100)
 
-    if final >= 70:
-        level = "CRITICAL"
-    elif final >= 40:
-        level = "HIGH"
-    elif final >= 20:
-        level = "MEDIUM"
-    elif final > 0:
-        level = "LOW"
-    else:
-        level = "CLEAN"
+    if   final >= 70: level = "CRITICAL"
+    elif final >= 40: level = "HIGH"
+    elif final >= 20: level = "MEDIUM"
+    elif final >   0: level = "LOW"
+    else:             level = "CLEAN"
 
-    return {
-        "score": final,
-        "level": level,
-        "reasons": reasons,
-    }
+    return {"score": final, "level": level, "reasons": reasons}
