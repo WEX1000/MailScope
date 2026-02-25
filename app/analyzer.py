@@ -4,8 +4,18 @@ from email.utils import parseaddr, getaddresses
 import re
 import ipaddress
 import hashlib
+from pathlib import Path
 
 from .utils import URL_REGEX, dedupe
+
+SUSPICIOUS_EXTENSIONS = {
+    ".exe", ".bat", ".cmd", ".com", ".scr", ".pif",
+    ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".ps1", ".ps2", ".psm1", ".psd1", ".hta", ".jar",
+    ".msi", ".dll", ".lnk", ".reg", ".inf", ".msc",
+    ".cpl", ".sys", ".drv", ".ocx", ".cab",
+    ".iso", ".img", ".dmg", ".apk", ".ipa",
+}
 
 def mail_analysis(path: str):
     with open(path, "rb") as f:
@@ -42,6 +52,7 @@ def mail_analysis(path: str):
     content = body_plain.get_content() if body_plain else ""
 
     attachments_hashes = {}
+    suspicious_attachments = []
     for part in msg.walk():
         if part.get_content_disposition() != "attachment":
             continue
@@ -49,10 +60,14 @@ def mail_analysis(path: str):
         data = part.get_payload(decode=True)
         if not data:
             continue
-    
+
         name = part.get_filename() or "brak_nazwy"
         sha256 = hashlib.sha256(data).hexdigest()
         attachments_hashes[name] = sha256
+
+        ext = Path(name).suffix.lower()
+        if ext in SUSPICIOUS_EXTENSIONS:
+            suspicious_attachments.append({"name": name, "ext": ext})
 
     return {
         "subject" : subject,
@@ -66,5 +81,6 @@ def mail_analysis(path: str):
         "message_id" : message_id,
         "user_agent" : user_agent,
         "urls" : urls,
-        "attachments_hashes" : attachments_hashes
+        "attachments_hashes" : attachments_hashes,
+        "suspicious_attachments" : suspicious_attachments,
     }
